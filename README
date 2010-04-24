@@ -1,0 +1,8 @@
+Simple mail testing suite. 
+
+Support the following protocols:
+
+-SMTP
+-IMAP
+-POP
+-LDAP
