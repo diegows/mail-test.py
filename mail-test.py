@@ -1,144 +1,281 @@
 #!/usr/bin/python
 #
-# Full mail test. Send and email via SMTP and read in via IMAP
+# Full mail test. Send and email via SMTP and read in via IMAP/POP
 #
 
-from optparse import OptionParser
-from smtplib import SMTP, SMTP_SSL
-from imaplib import IMAP4, IMAP4_SSL
 import sys
 import random
 import string
 import email
 import time
 import ldap
+import os
+import random
 
-def smtp_send(user, passwd):
-    if options.smtpssl:
-        smtp = SMTP_SSL(options.smtp)
-    else:
-        smtp = SMTP(options.smtp)
-        if options.smtptls:
+from ConfigParser import RawConfigParser, ParsingError
+from smtplib import SMTP, SMTP_SSL
+from email.mime.text import MIMEText
+from smtplib import SSLFakeFile
+from datetime import datetime
+from imaplib import IMAP4_SSL
+from poplib import POP3_SSL
+import smtplib
+import imaplib
+import poplib
+import ssl
+import email
+import pdb
+
+def die(msg):
+    print msg
+    sys.exit(1)
+
+
+class MySSLFakeFile(SSLFakeFile):
+    def read(self, size):
+        return self.sslobj.read(size)
+
+
+class MyIMAP4(imaplib.IMAP4):
+    def starttls(self):
+        imaplib.Commands['STARTTLS'] = ('NONAUTH',)
+        result = self._simple_command('STARTTLS')
+        if result[0] != 'OK':
+            raise self.error('START TLS failed.')
+        self.sock = ssl.wrap_socket(self.sock) 
+        self.file = MySSLFakeFile(self.sock)
+        result = self.capability()
+        if result[0] != 'OK':
+            raise self.abort('CAPABILITY failed.')
+
+
+class MyPOP3(poplib.POP3):
+    def starttls(self):
+        result = self._shortcmd('STLS')
+        if not result.startswith('+OK'):
+            raise poplib.error_proto('STLS failed.')
+        self.sock = ssl.wrap_socket(self.sock)
+        self.file = MySSLFakeFile(self.sock)
+
+
+class MailTest():
+    def __init__(self, config):
+        self.config = config
+        for section in config.sections():
+            for option in config.options(section):
+                value = config.get(section, option)
+                if value.isdigit():
+                    value = int(value)
+                setattr(self, option, value)
+
+        users_file = self.users
+        self.users = []
+        users_fd = open(users_file)
+        for line in users_fd:
+            line = line.strip()
+            user = line.split()
+            self.users.append(user)
+
+        if not hasattr(self, 'smtp'):
+            die('smtp server is required.')
+
+        if not hasattr(self, 'imap') and not hasattr(self, 'pop'):
+            die('imap or pop server is required.')
+
+        if hasattr(self, 'imap'):
+            self.imap = self.imap.split()
+
+        if hasattr(self, 'pop'):
+            self.pop = self.pop.split()
+
+        self.smtp = self.smtp.split()
+
+        self.smtp_errors = 0
+        self.imap_errors = 0
+        self.pop_errors = 0
+        self.sent = 0
+        self.received = 0
+        self.pop_recvd = 0
+        self.imap_recvd = 0
+
+        print self.log
+        self.log_fd = open(self.log, 'a')
+
+    def logf(self, msg):
+        self.log_fd.write(datetime.now().isoformat() + ' ' + msg + "\n")
+
+    def run(self):
+        for i in range(0, int(self.children)):
+            if not os.fork():
+                self.nro = i
+                self.run_child()
+
+        try:
+            os.waitpid(0, 0)
+        except OSError:
+            print 'No child process'
+
+    def run_child(self):
+        for i in range(0, self.count):
+            self.sender = random.choice(self.users)
+            self.recipient = random.choice(self.users)
+            try:
+                self.send_mail()
+                time.sleep(int(self.sleep))
+                self.recv_mail()
+                time.sleep(int(self.sleep))
+            except smtplib.SMTPException, e:
+                self.smtp_errors += 1
+                self.logf('SMTP error: %s, user=%s' % (str(e), self.sender))
+            except imaplib.IMAP4.error, e:
+                self.imap_errors += 1
+                self.logf('IMAP error: %s, user=%s' % (str(e), self.recipient))
+            except poplib.error_proto, e:
+                self.pop_errors += 1
+                self.logf('POP error: %s, user=%s' % (str(e), self.recipient))
+
+            print '----'
+            print 'Sent: ', self.sent
+            print 'Recv: ', self.received
+            print 'IMAP: ', self.imap_recvd
+            print 'POP: ', self.pop_recvd
+            print 'SMTP errors: ', self.smtp_errors
+            print 'Imap errors: ', self.imap_errors
+            print 'POP errors: ', self.pop_errors
+
+    def random_msg(self):
+        subject =  ''.join(random.choice(string.letters) for i in xrange(40))
+        body =  ''.join(random.choice(string.letters) for i in xrange(999))
+        msg = MIMEText(body)
+        msg['subject'] = subject
+        #msg['to'] = self.recipient
+        #msg['from'] = self.sender
+        #print msg.as_string()
+
+        return msg
+
+    def send_mail(self):
+        smtp = random.choice(self.smtp)
+        print 'SMTP', smtp, self.sender
+        if self.smtp_ssl == 'true':
+            smtp = SMTP_SSL(smtp, self.smtp_port)
+        else:
+            smtp = SMTP(smtp, self.smtp_port)
+
+        if self.smtp_start_tls == 'true':
             smtp.starttls()
 
-    smtp.login(user, passwd)
-    chars = string.letters + string.digits
-    str_rand = "".join( [ random.choice(chars) for i in xrange(15) ] )
-    subject = body = str_rand
-    msg = "Subject: %s\n\r\n\r%s\n\r" % (subject, body)
-    smtp.sendmail(user, user, msg)
+        if self.smtp_auth:
+            smtp.login(*self.sender)
 
-    return subject
+        self.subjects = []
+        for i in range(0, self.msg_per_connection):
+            msg = self.random_msg()
+            self.subjects.append(msg["subject"])
+            smtp.sendmail(self.sender[0], self.recipient[0],
+                        msg.as_string())
+            self.sent += 1
 
-def imap_read(subject, user, passwd):
-    if options.imapssl:
-        imap = IMAP4_SSL(options.imap)
-    else:
-        imap = IMAP4(options.imap)
+    def recv_mail(self):
+        if self.pop_recv == 'true':
+            for i in range(0, int(self.fetchretries)):
+                if self.pop_recv_mail():
+                    self.received += 1
+                    self.pop_recvd += 1
+                    break
+                time.sleep(int(self.fetchwait))
 
-    resp = imap.login(user, passwd)
-    if resp[0] != 'OK':
-        print "%s imap auth failed." % (user)
-        return
+        if self.imap_recv == 'true':
+            self.imap_recv_mail()
 
-    imap.select()
-    for i in range(0, int(options.fetchretries)):
-        msgs = imap.search(None, 'SUBJECT', '"%s"' % (subject))
-        for msgnum in msgs[1][0].split():
-            msg = imap.fetch(msgnum, '(RFC822)')
-            msg = msg[1][0][1]
+    def pop_recv_mail(self):
+        pop = random.choice(self.pop)
+        print 'POP', pop, self.recipient
+        if self.pop_ssl == 'true':
+            pop = POP3_SSL(pop, self.pop_port)
+        else:
+            pop = MyPOP3(pop, self.pop_port)
+
+        if self.pop_start_tls == 'true':
+            pop.starttls()
+
+        result = pop.user(self.recipient[0])
+        if not result.startswith('+OK'):
+            raise Exception('POP user login failed: ' + str(result))
+
+        result = pop.pass_(self.recipient[1])
+        if not result.startswith('+OK'):
+            raise Exception('POP pass login failed: ' + str(result))
+
+        result = pop.list()
+        if not result[0].startswith('+OK'):
+            raise Exception('POP list failed: ' + str(result))
+
+        for msg_nro in result[1]:
+            msg_nro = msg_nro.split()[0]
+            msg = pop.retr(msg_nro)
+            if not result[0].startswith('+OK'):
+                raise Exception('POP retr failed: ' + str(result))
+
+            msg = '\r\n'.join(msg[1])
             msg = email.message_from_string(msg)
-            if msg['Subject'] == subject:
+            if msg['subject'] in self.subjects:
+                #XXX: report this. It's a bug of poplib. 
+                pop.quit()
                 return True
-        time.sleep(int(options.fetchwait))
 
-    return False
+        #XXX: report this. It's a bug of poplib. 
+        pop.quit()
 
-def ldap_test(user, passwd):
-    l = ldap.initialize(options.ldapuri)
+        return False
 
-    user_bind = user.split('@')
-    user_bind = 'uid=%s,%s' % (user_bind[0], options.ldapsuffix)
-    l.bind(user_bind, passwd)
+    def imap_recv_mail(self):
+        imap = random.choice(self.imap)
+        print 'IMAP', imap, self.recipient
+        if self.imap_ssl == 'true':
+            imap = IMAP4_SSL(imap, self.imap_port)
+        else:
+            imap = MyIMAP4(imap, self.imap_port)
 
-    filter = '(mail=%s)' % user
-    r = l.search_s(options.ldapbase, ldap.SCOPE_SUBTREE, filter)
+        if self.imap_start_tls == 'true':
+            imap.starttls()
 
-    if len(r):
-        return True
-    
-    return False
+        resp = imap.login(*self.recipient)
+        if resp[0] != 'OK':
+            raise Exception('IMAP login fail.')
+
+        imap.select()
+        for subject in self.subjects:
+            if self.imap_get_msg(imap, subject):
+                self.received += 1
+                self.imap_recvd += 1
+
+        imap.logout()
+
+    def imap_get_msg(self, imap, subject):
+        for i in range(0, int(self.fetchretries)):
+            msgs = imap.search(None, 'SUBJECT', '"%s"' % (subject))
+            for msgnum in msgs[1][0].split():
+                msg = imap.fetch(msgnum, '(RFC822)')
+                msg = msg[1][0][1]
+                msg = email.message_from_string(msg)
+                if msg['Subject'] == subject:
+                    return True
+
+            time.sleep(int(self.fetchwait))
+
+        return False
 
 
-usage = "usage: %s [options] -f file -s smtp -i imap" % (sys.argv[0])
-parser = OptionParser(usage)
+if len(sys.argv) != 2:
+    die("I need a test file!")
 
-parser.add_option("-f", "--file", dest = "userlist",
-                    help = "Read user and pass from FILE")
+try:
+    test = RawConfigParser()
+    test.read(sys.argv[1])
+except ParsingError, e:
+    die("Test file error: " + e)
 
-parser.add_option("-a", "--smtpauth", action = "store_true", dest = "smtpauth",
-                    help = "Use SMTP authentication")
-
-parser.add_option("-s", "--smtp", dest = "smtp",
-                    help = "SMTP server")
-
-parser.add_option("-i", "--imap", dest = "imap",
-                    help = "IMAP server")
-
-parser.add_option("--smtpssl", action = "store_true", dest = "smtpssl",
-                    help = "Use SMTP SSL.")
-
-parser.add_option("--smtptls", action = "store_true", dest = "smtptls",
-                    help = "Use SMTP TLS.")
-
-parser.add_option("--imapssl", action = "store_true", dest = "imapssl",
-                    help = "Use IMAP SSL.")
-
-parser.add_option("--fetch-retries", default = '1', dest = "fetchretries",
-                    help = "Number of fetch retries.")
-
-parser.add_option("--fetch-wait", default = '0', dest = "fetchwait",
-                    help = "Seconds between retries.")
-
-parser.add_option("--ldap-uri", dest = "ldapuri",
-                    help = "LDAP server.")
-
-parser.add_option("--ldap-base", dest = "ldapbase",
-                    help = "LDAP base.")
-
-parser.add_option("--ldap-suffix", dest = "ldapsuffix",
-                    help = "LDAP suffix.")
-
-(options, args) = parser.parse_args()
-
-if not options.imap:
-    parser.error("IMAP server is required.")
-
-if not options.smtp:
-    parser.error("IMAP server is required.")
-
-if not options.userlist:
-    parser.error("User and password list is requiered.")
-
-if not options.fetchwait.isdigit():
-    parser.error("--fetch-wait requires a number (seconds).")
-
-if not options.fetchretries.isdigit():
-    parser.error("--fetch-retries requires a number.")
-
-userlist = open(options.userlist)
-for userpw in userlist:
-    userpw = userpw.strip()
-    subject = smtp_send(*userpw.split())
-    time.sleep(2)
-    print userpw, subject,
-    if imap_read(subject, *userpw.split()):
-        print 'MAIL=OK',
-    else:
-        print 'MAIL=FAIL',
-
-    if ldap_test(*userpw.split()):
-        print 'LDAP=OK'
-    else:
-        print 'LDAP=FAIL'
+test = MailTest(test)
+test.run()
 
