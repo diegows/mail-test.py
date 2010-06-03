@@ -19,6 +19,7 @@ from smtplib import SSLFakeFile
 from datetime import datetime
 from imaplib import IMAP4_SSL
 from poplib import POP3_SSL
+from copy import copy
 import smtplib
 import imaplib
 import poplib
@@ -178,10 +179,9 @@ class MailTest():
 
     def recv_mail(self):
         if self.pop_recv == 'true':
+            self.pop_subjects = copy(self.subjects)
             for i in range(0, int(self.fetchretries)):
                 if self.pop_recv_mail():
-                    self.received += 1
-                    self.pop_recvd += 1
                     break
                 time.sleep(int(self.fetchwait))
 
@@ -219,13 +219,18 @@ class MailTest():
 
             msg = '\r\n'.join(msg[1])
             msg = email.message_from_string(msg)
-            if msg['subject'] in self.subjects:
-                #XXX: report this. It's a bug of poplib. 
-                pop.quit()
-                return True
 
-        #XXX: report this. It's a bug of poplib. 
+            if msg['subject'] in self.pop_subjects:
+                self.pop_subjects.remove(msg['subject'])
+                self.received += 1
+                self.pop_recvd += 1
+
+        #XXX: report this. It's a bug of poplib. It should close the 
+        #socket in object destruction.
         pop.quit()
+
+	if len(self.subjects) == 0:
+		return True
 
         return False
 
