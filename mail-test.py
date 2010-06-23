@@ -67,6 +67,10 @@ class MailTest():
                 value = config.get(section, option)
                 if value.isdigit():
                     value = int(value)
+                elif value.lower() in [ 'false', 'no' ]:
+                    value = False
+                elif value.lower() in [ 'true', 'yes' ]:
+                    value = True
                 setattr(self, option, value)
 
         users_file = self.users
@@ -158,12 +162,12 @@ class MailTest():
     def send_mail(self):
         smtp = random.choice(self.smtp)
         print 'SMTP', smtp, self.sender
-        if self.smtp_ssl == 'true':
+        if self.smtp_ssl:
             smtp = SMTP_SSL(smtp, self.smtp_port)
         else:
             smtp = SMTP(smtp, self.smtp_port)
 
-        if self.smtp_start_tls == 'true':
+        if self.smtp_start_tls:
             smtp.starttls()
 
         if self.smtp_auth:
@@ -178,25 +182,25 @@ class MailTest():
             self.sent += 1
 
     def recv_mail(self):
-        if self.pop_recv == 'true':
+        if self.pop_recv:
             self.pop_subjects = copy(self.subjects)
             for i in range(0, int(self.fetchretries)):
                 if self.pop_recv_mail():
                     break
                 time.sleep(int(self.fetchwait))
 
-        if self.imap_recv == 'true':
+        if self.imap_recv:
             self.imap_recv_mail()
 
     def pop_recv_mail(self):
         pop = random.choice(self.pop)
         print 'POP', pop, self.recipient
-        if self.pop_ssl == 'true':
+        if self.pop_ssl:
             pop = POP3_SSL(pop, self.pop_port)
         else:
             pop = MyPOP3(pop, self.pop_port)
 
-        if self.pop_start_tls == 'true':
+        if self.po == 'true':p_start_tls:
             pop.starttls()
 
         result = pop.user(self.recipient[0])
@@ -237,12 +241,12 @@ class MailTest():
     def imap_recv_mail(self):
         imap = random.choice(self.imap)
         print 'IMAP', imap, self.recipient
-        if self.imap_ssl == 'true':
+        if self.imap_ssl:
             imap = IMAP4_SSL(imap, self.imap_port)
         else:
             imap = MyIMAP4(imap, self.imap_port)
 
-        if self.imap_start_tls == 'true':
+        if self.imap_start_tls:
             imap.starttls()
 
         resp = imap.login(*self.recipient)
