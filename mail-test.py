@@ -185,7 +185,8 @@ class MailTest():
         if self.pop_recv:
             self.pop_subjects = copy(self.subjects)
             for i in range(0, int(self.fetchretries)):
-                if self.pop_recv_mail():
+                self.pop_recv_mail()
+                if len(self.pop_subjects) == 0:
                     break
                 time.sleep(int(self.fetchwait))
 
