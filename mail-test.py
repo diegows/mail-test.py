@@ -200,7 +200,7 @@ class MailTest():
         else:
             pop = MyPOP3(pop, self.pop_port)
 
-        if self.po == 'true':p_start_tls:
+        if self.pop_start_tls:
             pop.starttls()
 
         result = pop.user(self.recipient[0])
